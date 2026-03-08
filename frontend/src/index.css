@@ -1,0 +1,190 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   THEME TOKENS (HSL variables)
+   - Fixed: removed conflicting duplicate sidebar vars
+   - Improved: higher sidebar text contrast + clearer hover surface
+   ========================================================================== */
+
+@layer base {
+  :root {
+    /* Core surfaces */
+    --background: 210 20% 98%;
+    --foreground: 220 30% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 30% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 30% 12%;
+
+    /* Brand blue */
+    --primary: 217 91% 55%;
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 217 91% 48%;
+    --primary-glow: 217 91% 70%;
+
+    --secondary: 215 25% 93%;
+    --secondary-foreground: 220 30% 25%;
+
+    --muted: 215 20% 94%;
+    --muted-foreground: 215 16% 50%;
+
+    --accent: 217 91% 55%;
+    --accent-foreground: 0 0% 100%;
+
+    /* Status */
+    --status-pending: 38 92% 50%;
+    --status-pending-bg: 38 100% 95%;
+    --status-approved: 142 76% 36%;
+    --status-approved-bg: 142 76% 94%;
+    --status-rejected: 0 84% 57%;
+    --status-rejected-bg: 0 86% 95%;
+    --status-delivered: 217 91% 55%;
+    --status-delivered-bg: 217 91% 94%;
+    --status-stock: 262 83% 58%;
+    --status-stock-bg: 262 83% 95%;
+
+    --destructive: 0 84% 57%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 215 20% 89%;
+    --input: 215 20% 89%;
+    --ring: 217 91% 55%;
+
+    --radius: 0.625rem;
+
+    /* ----------------------------------------------------------------------
+       SIDEBAR (single source of truth)
+       - Text is brighter
+       - Hover surface is clearer
+       - Active uses brand primary
+       ---------------------------------------------------------------------- */
+    --sidebar-bg: 222 47% 11%;
+    --sidebar-surface: 222 40% 15%;
+
+    --sidebar-fg: 215 25% 82%;
+    --sidebar-fg-active: 0 0% 100%;
+
+    /* Hover surface */
+    --sidebar-accent: 222 40% 18%;
+    --sidebar-accent-foreground: 0 0% 100%;
+
+    /* Borders */
+    --sidebar-border: 222 35% 22%;
+
+    /* Active (brand) */
+    --sidebar-primary: 217 91% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+
+    /* shadcn compat mapping (no duplicates) */
+    --sidebar-background: var(--sidebar-bg);
+    --sidebar-foreground: var(--sidebar-fg);
+    --sidebar-ring: 217 91% 55%;
+
+    /* Gradients */
+    --gradient-brand: linear-gradient(135deg, hsl(217 91% 55%), hsl(240 80% 65%));
+    --gradient-card: linear-gradient(160deg, hsl(0 0% 100%), hsl(215 25% 97%));
+    --gradient-sidebar: linear-gradient(180deg, hsl(222 47% 11%), hsl(222 50% 9%));
+
+    /* Shadows */
+    --shadow-sm: 0 1px 3px hsl(222 30% 10% / 0.08);
+    --shadow-md: 0 4px 12px hsl(222 30% 10% / 0.12);
+    --shadow-lg: 0 8px 24px hsl(222 30% 10% / 0.16);
+    --shadow-brand: 0 4px 20px hsl(217 91% 55% / 0.3);
+  }
+
+  .dark {
+    --background: 222 47% 8%;
+    --foreground: 215 25% 92%;
+
+    --card: 222 40% 11%;
+    --card-foreground: 215 25% 92%;
+
+    --popover: 222 40% 11%;
+    --popover-foreground: 215 25% 92%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 217 91% 54%;
+    --primary-glow: 217 91% 72%;
+
+    --secondary: 222 35% 18%;
+    --secondary-foreground: 215 25% 80%;
+
+    --muted: 222 35% 18%;
+    --muted-foreground: 215 16% 55%;
+
+    --accent: 217 91% 60%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 57%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 222 35% 20%;
+    --input: 222 35% 20%;
+    --ring: 217 91% 60%;
+
+    /* Sidebar dark tweaks */
+    --sidebar-bg: 222 50% 7%;
+    --sidebar-surface: 222 40% 12%;
+
+    --sidebar-fg: 215 22% 78%;
+    --sidebar-fg-active: 0 0% 100%;
+
+    --sidebar-accent: 222 40% 14%;
+    --sidebar-accent-foreground: 0 0% 100%;
+
+    --sidebar-border: 222 35% 14%;
+
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+
+    /* shadcn compat mapping */
+    --sidebar-background: var(--sidebar-bg);
+    --sidebar-foreground: var(--sidebar-fg);
+    --sidebar-ring: 217 91% 60%;
+  }
+}
+
+/* ==========================================================================
+   BASE STYLES
+   ========================================================================== */
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+}
+
+/* ==========================================================================
+   UTILITIES
+   ========================================================================== */
+
+@layer utilities {
+  /* Existing helpers */
+  .sidebar-bg { background: var(--gradient-sidebar); }
+  .card-gradient { background: var(--gradient-card); }
+  .shadow-brand { box-shadow: var(--shadow-brand); }
+  .shadow-card { box-shadow: var(--shadow-md); }
+
+  .scrollbar-thin::-webkit-scrollbar { width: 4px; height: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { @apply bg-border rounded-full; }
+
+  /* Optional: better scrollbar contrast inside sidebar */
+  .sidebar-bg .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--sidebar-border));
+  }
+}
