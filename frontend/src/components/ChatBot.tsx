@@ -1,206 +1,438 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { MessageSquare, X, Send, Bot, User } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { mockDemandes, mockProduits } from '@/data/mockData';
+// src/components/ChatbotWidget.tsx
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  MessageCircle, X, Send, Loader2, Bot, User,
+  ChevronDown, RotateCcw,
+} from 'lucide-react';
+import api from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
 interface Message {
-  id: number;
-  role: 'user' | 'bot';
-  text: string;
-  timestamp: string;
+  id:        string;
+  role:      'user' | 'assistant';
+  content:   string;
+  timestamp: Date;
+  error?:    boolean;
 }
 
-const getBotResponse = (input: string, userId?: number): string => {
-  const lower = input.toLowerCase();
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-  if (lower.includes('statut') || lower.includes('demande') || lower.includes('status')) {
-    if (userId) {
-      const myRequests = mockDemandes.filter(d => d.id_demandeur === userId);
-      if (myRequests.length === 0) return "Vous n'avez aucune demande en cours.";
-      const latest = myRequests[0];
-      const statusLabels: Record<string, string> = {
-        EN_ATTENTE_DEPT: '🟡 En attente de validation par le département',
-        EN_ATTENTE_STOCK: '🟣 En attente de validation par le stock',
-        VALIDEE: '✅ Validée',
-        LIVREE: '📦 Livrée',
-        REFUSEE_DEPT: '❌ Refusée par le département',
-        REFUSEE_STOCK: '❌ Refusée par le stock',
-      };
-      return `Votre dernière demande (#${latest.id_demande}) est actuellement : ${statusLabels[latest.statut] || latest.statut}`;
+const uid = () => Math.random().toString(36).slice(2, 9);
+
+const formatTime = (d: Date) =>
+  d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+// Light markdown → JSX (bold, inline code, bullet points, line breaks)
+const renderContent = (text: string) => {
+  const lines = text.split('\n');
+  return lines.map((line, i) => {
+    const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+    const formatted = parts.map((part, j) => {
+      if (part.startsWith('**') && part.endsWith('**'))
+        return <strong key={j}>{part.slice(2, -2)}</strong>;
+      if (part.startsWith('`') && part.endsWith('`'))
+        return (
+          <code key={j} className="px-1 py-0.5 bg-muted rounded text-[11px] font-mono">
+            {part.slice(1, -1)}
+          </code>
+        );
+      return <span key={j}>{part}</span>;
+    });
+
+    const isBullet = line.trimStart().startsWith('- ') || line.trimStart().startsWith('• ');
+    if (isBullet) {
+      return (
+        <div key={i} className="flex gap-2 items-start my-0.5">
+          <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
+          <span className="flex-1">
+            {formatted.map((p, j) => {
+              if (React.isValidElement(p)) return p;
+              const s = String((p as any)?.props?.children ?? p);
+              return <span key={j}>{s.replace(/^[-•]\s*/, '')}</span>;
+            })}
+          </span>
+        </div>
+      );
     }
-    return "Je n'ai pas pu identifier votre compte pour récupérer vos demandes.";
-  }
 
-  if (lower.includes('laptop') || lower.includes('ordinateur') || lower.includes('dell') || lower.includes('pc')) {
-    const laptop = mockProduits.find(p => p.nom_produit.toLowerCase().includes('laptop'));
-    return laptop ? `💻 Il y a actuellement **${laptop.quantite} unités** de "${laptop.nom_produit}" en stock. Référence: ${laptop.reference}` : "Aucun laptop trouvé dans le catalogue.";
-  }
-
-  if (lower.includes('stock') || lower.includes('quantité') || lower.includes('inventaire')) {
-    const alerts = mockProduits.filter(p => p.quantite <= p.seuil_alerte);
-    const total = mockProduits.reduce((s, p) => s + p.quantite, 0);
-    return `📊 Stock total: **${total} unités** sur ${mockProduits.length} produits. ${alerts.length > 0 ? `⚠️ ${alerts.length} produit(s) en alerte: ${alerts.map(p => p.nom_produit).join(', ')}` : '✅ Aucune alerte de stock.'}`;
-  }
-
-  if (lower.includes('produit') || lower.includes('catalogue') || lower.includes('article')) {
-    return `📦 Le catalogue contient **${mockProduits.length} produits** répartis en 4 catégories. Souhaitez-vous des informations sur un produit spécifique?`;
-  }
-
-  if (lower.includes('aide') || lower.includes('help') || lower.includes('comment')) {
-    return `🤖 Je peux vous aider avec:\n• "Statut de ma demande"\n• "Combien de laptops en stock ?"\n• "Inventaire total"\n• "Produits en alerte"\n\nQuelle information souhaitez-vous?`;
-  }
-
-  if (lower.includes('bonjour') || lower.includes('salut') || lower.includes('hello')) {
-    return "👋 Bonjour! Je suis l'assistant EquipManager. Comment puis-je vous aider? Demandez-moi le statut de vos demandes, les niveaux de stock, etc.";
-  }
-
-  return "Je n'ai pas compris votre question. Essayez: \"statut de ma demande\", \"stock des laptops\", ou tapez \"aide\" pour voir ce que je peux faire.";
+    return (
+      <div key={i} className={i < lines.length - 1 ? 'mb-1' : ''}>
+        {formatted}
+      </div>
+    );
+  });
 };
 
-const ChatBot: React.FC = () => {
-  const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([
-    { id: 1, role: 'bot', text: '👋 Bonjour! Je suis l\'assistant EquipManager. Comment puis-je vous aider?', timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) }
-  ]);
-  const [input, setInput] = useState('');
-  const [typing, setTyping] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+// ─── Suggested questions ──────────────────────────────────────────────────────
+
+const SUGGESTIONS_BY_ROLE: Record<string, string[]> = {
+  employe: [
+    'Quelles sont mes dernières demandes ?',
+    'Quel est le statut de ma demande #1 ?',
+    'Quels produits sont disponibles en stock ?',
+    'Comment créer une nouvelle demande ?',
+    'Comment modifier ou supprimer une demande ?',
+    "Que faire si ma demande est refusée ?",
+  ],
+  'responsable departement': [
+    'Combien de demandes en attente dans mon département ?',
+    'Liste des demandes en attente de validation',
+    'Statistiques de mon département',
+    'Comment approuver ou refuser une demande ?',
+    'Comment créer ma propre demande ?',
+    'Quels produits sont en stock limité ?',
+  ],
+  'responsable stock': [
+    'Combien de demandes attendent ma validation ?',
+    'Quels produits sont en alerte de stock ?',
+    'Derniers mouvements de stock',
+    'Statistiques du stock actuel',
+    'Comment valider une demande ?',
+    'Comment enregistrer une entrée de stock ?',
+  ],
+  admin: [
+    'Combien de demandes par département ?',
+    'Vue globale de la plateforme',
+    "Dernières actions dans l'historique",
+    'Quels produits sont en alerte ?',
+    "Combien d'utilisateurs actifs ?",
+    'Toutes les demandes en attente',
+  ],
+};
+
+const getSuggestions = (role?: string): string[] => {
+  if (!role) return SUGGESTIONS_BY_ROLE['employe'];
+  const normalized = role.toLowerCase().trim();
+  return SUGGESTIONS_BY_ROLE[normalized] ?? SUGGESTIONS_BY_ROLE['employe'];
+};
+
+// ─── Message bubble ───────────────────────────────────────────────────────────
+
+const MessageBubble: React.FC<{ msg: Message }> = ({ msg }) => {
+  const isUser = msg.role === 'user';
+  return (
+    <div className={`flex gap-2.5 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+      <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5
+        ${isUser ? 'bg-primary' : 'bg-muted border border-border'}`}>
+        {isUser
+          ? <User className="w-3.5 h-3.5 text-primary-foreground" />
+          : <Bot className="w-3.5 h-3.5 text-muted-foreground" />}
+      </div>
+      <div className={`max-w-[78%] flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
+        <div className={`px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed
+          ${isUser
+            ? 'bg-primary text-primary-foreground rounded-tr-sm'
+            : msg.error
+              ? 'bg-red-50 border border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400 rounded-tl-sm'
+              : 'bg-muted border border-border text-foreground rounded-tl-sm'}`}>
+          <div className="space-y-0.5">
+            {renderContent(msg.content)}
+          </div>
+        </div>
+        <span className="text-[10px] text-muted-foreground px-1">
+          {formatTime(msg.timestamp)}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+// ─── Typing indicator ─────────────────────────────────────────────────────────
+
+const TypingIndicator: React.FC = () => (
+  <div className="flex gap-2.5">
+    <div className="w-7 h-7 rounded-full bg-muted border border-border flex items-center justify-center shrink-0">
+      <Bot className="w-3.5 h-3.5 text-muted-foreground" />
+    </div>
+    <div className="bg-muted border border-border rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
+      {[0, 1, 2].map(i => (
+        <span
+          key={i}
+          className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce"
+          style={{ animationDelay: `${i * 150}ms` }}
+        />
+      ))}
+    </div>
+  </div>
+);
+
+// ─── Main Widget ──────────────────────────────────────────────────────────────
+
+const ChatbotWidget: React.FC = () => {
   const { currentUser } = useAuth();
+  const userRole = currentUser?.role_nom ?? '';
+  const [open, setOpen]         = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput]       = useState('');
+  const [loading, setLoading]   = useState(false);
+  const [unread, setUnread]     = useState(0);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef  = useRef<HTMLTextAreaElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // ── Scroll ────────────────────────────────────────────────────────────────
+
+  const scrollToBottom = useCallback((smooth = true) => {
+    bottomRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
+  }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, typing]);
+    if (open) {
+      scrollToBottom(false);
+      setUnread(0);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [open, scrollToBottom]);
 
-  const sendMessage = async () => {
-    if (!input.trim()) return;
+  useEffect(() => {
+    if (open) scrollToBottom();
+  }, [messages, loading, open, scrollToBottom]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setShowScrollBtn(el.scrollHeight - el.scrollTop - el.clientHeight > 80);
+  };
+
+  // ── Welcome message ───────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (messages.length === 0) {
+      setMessages([{
+        id:        uid(),
+        role:      'assistant',
+        content:   'Bonjour ! 👋 Je suis votre assistant pour cette plateforme de gestion de stock.\n\nComment puis-je vous aider aujourd\'hui ?',
+        timestamp: new Date(),
+      }]);
+    }
+  }, []);
+
+  // ── Send message ──────────────────────────────────────────────────────────
+
+  const sendMessage = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || loading) return;
+
     const userMsg: Message = {
-      id: messages.length + 1,
-      role: 'user',
-      text: input.trim(),
-      timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+      id: uid(), role: 'user', content: trimmed, timestamp: new Date(),
     };
+
     setMessages(prev => [...prev, userMsg]);
-    const userInput = input.trim();
     setInput('');
-    setTyping(true);
+    setLoading(true);
+    if (!open) setUnread(n => n + 1);
 
-    await new Promise(r => setTimeout(r, 800 + Math.random() * 600));
+    // Build history — only clean user/assistant text messages
+    // (no error messages, no tool messages — backend handles those internally)
+    const history = messages
+      .filter(m => !m.error && typeof m.content === 'string' && m.content.trim() !== '')
+      .slice(-10)
+      .map(m => ({ role: m.role, content: m.content }));
 
-    const botMsg: Message = {
-      id: messages.length + 2,
-      role: 'bot',
-      text: getBotResponse(userInput, currentUser?.id_utilisateur),
-      timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-    };
-    setTyping(false);
-    setMessages(prev => [...prev, botMsg]);
+    try {
+      const res = await api.post('/chatbot/message', {
+        message: trimmed,
+        history,
+      });
+
+      setMessages(prev => [...prev, {
+        id:        uid(),
+        role:      'assistant',
+        content:   res.data.reply,
+        timestamp: new Date(),
+      }]);
+
+      if (!open) setUnread(n => n + 1);
+
+    } catch (err: any) {
+      setMessages(prev => [...prev, {
+        id:        uid(),
+        role:      'assistant',
+        content:   err.response?.data?.message ?? 'Une erreur est survenue. Veuillez réessayer.',
+        timestamp: new Date(),
+        error:     true,
+      }]);
+    } finally {
+      setLoading(false);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [loading, messages, open]);
+
+  // ── Keyboard handler ──────────────────────────────────────────────────────
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage(input);
+    }
   };
 
-  const handleKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  // ── Reset ─────────────────────────────────────────────────────────────────
+
+  const resetConversation = () => {
+    setMessages([{
+      id:        uid(),
+      role:      'assistant',
+      content:   'Conversation réinitialisée. Comment puis-je vous aider ?',
+      timestamp: new Date(),
+    }]);
   };
 
-  const quickReplies = ['Statut de ma demande', 'Stock des laptops', 'Inventaire total'];
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <>
-      {/* Floating button */}
-      <button
-        onClick={() => setOpen(!open)}
-        className={cn(
-          'fixed bottom-6 right-6 w-14 h-14 rounded-full bg-primary text-primary-foreground shadow-brand flex items-center justify-center hover:scale-110 transition-all z-50',
-          open && 'rotate-90'
-        )}
+      {/* ── Chat panel ── */}
+      <div
+        className={`
+          fixed bottom-24 right-6 z-50
+          w-[380px] max-w-[calc(100vw-2rem)]
+          bg-card border border-border rounded-2xl shadow-2xl
+          flex flex-col overflow-hidden
+          transition-all duration-300 ease-out
+          ${open
+            ? 'opacity-100 translate-y-0 pointer-events-auto'
+            : 'opacity-0 translate-y-4 pointer-events-none'}
+        `}
+        style={{ height: '520px' }}
       >
-        {open ? <X className="w-5 h-5" /> : <MessageSquare className="w-5 h-5" />}
-        {!open && messages.filter(m => m.role === 'bot').length > 1 && (
-          <span className="absolute -top-1 -right-1 w-4 h-4 bg-status-rejected text-white text-[10px] font-bold rounded-full flex items-center justify-center" />
-        )}
-      </button>
-
-      {/* Chat window */}
-      {open && (
-        <div className="fixed bottom-24 right-6 w-80 bg-card rounded-2xl shadow-lg border border-border z-50 overflow-hidden animate-bounce-in flex flex-col" style={{ height: '460px' }}>
-          {/* Header */}
-          <div className="bg-primary px-4 py-3 flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-primary-foreground/20 flex items-center justify-center">
-              <Bot className="w-4 h-4 text-primary-foreground" />
-            </div>
-            <div>
-              <p className="text-primary-foreground font-semibold text-sm">Assistant EquipManager</p>
-              <div className="flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse-dot" />
-                <span className="text-primary-foreground/70 text-xs">En ligne</span>
-              </div>
+        {/* Header */}
+        <div className="flex items-center gap-3 px-4 py-3.5 border-b border-border bg-card shrink-0">
+          <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center">
+            <Bot className="w-5 h-5 text-primary-foreground" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-foreground">Assistant</p>
+            <div className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+              <p className="text-xs text-muted-foreground">En ligne</p>
             </div>
           </div>
-
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-3">
-            {messages.map(m => (
-              <div key={m.id} className={cn('flex gap-2', m.role === 'user' && 'flex-row-reverse')}>
-                <div className={cn('w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-1', m.role === 'bot' ? 'bg-primary/10' : 'bg-secondary')}>
-                  {m.role === 'bot' ? <Bot className="w-3.5 h-3.5 text-primary" /> : <User className="w-3.5 h-3.5 text-muted-foreground" />}
-                </div>
-                <div className={cn('max-w-[75%] rounded-2xl px-3 py-2 text-xs leading-relaxed', m.role === 'bot' ? 'bg-muted text-foreground rounded-tl-none' : 'bg-primary text-primary-foreground rounded-tr-none')}>
-                  <p className="whitespace-pre-line">{m.text}</p>
-                  <p className={cn('text-[10px] mt-1 opacity-60', m.role === 'bot' ? 'text-muted-foreground' : 'text-primary-foreground')}>{m.timestamp}</p>
-                </div>
-              </div>
-            ))}
-            {typing && (
-              <div className="flex gap-2">
-                <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-1">
-                  <Bot className="w-3.5 h-3.5 text-primary" />
-                </div>
-                <div className="bg-muted rounded-2xl rounded-tl-none px-4 py-3 flex gap-1 items-center">
-                  {[0, 1, 2].map(i => (
-                    <span key={i} className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-pulse-dot" style={{ animationDelay: `${i * 0.2}s` }} />
-                  ))}
-                </div>
-              </div>
-            )}
-            <div ref={bottomRef} />
+          <div className="flex items-center gap-1">
+            <button
+              onClick={resetConversation}
+              title="Réinitialiser la conversation"
+              className="w-8 h-8 rounded-lg hover:bg-muted flex items-center justify-center transition-colors text-muted-foreground hover:text-foreground"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setOpen(false)}
+              className="w-8 h-8 rounded-lg hover:bg-muted flex items-center justify-center transition-colors text-muted-foreground hover:text-foreground"
+            >
+              <ChevronDown className="w-4 h-4" />
+            </button>
           </div>
+        </div>
 
-          {/* Quick replies */}
-          {messages.length <= 2 && (
-            <div className="px-3 pb-2 flex flex-wrap gap-1.5">
-              {quickReplies.map(q => (
+        {/* Messages */}
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto px-4 py-4 space-y-4 scroll-smooth"
+        >
+          {messages.map(msg => (
+            <MessageBubble key={msg.id} msg={msg} />
+          ))}
+
+          {loading && <TypingIndicator />}
+
+          {/* FAQ suggestions — only on fresh conversation */}
+          {messages.length === 1 && !loading && (
+            <div className="space-y-2 pt-1">
+              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider px-1">
+                Questions fréquentes
+              </p>
+              {getSuggestions(userRole).map((s, i) => (
                 <button
-                  key={q}
-                  onClick={() => { setInput(q); }}
-                  className="text-[11px] px-2.5 py-1.5 bg-primary/10 text-primary rounded-full hover:bg-primary/20 transition-colors font-medium"
+                  key={i}
+                  onClick={() => sendMessage(s)}
+                  className="w-full text-left text-xs px-3 py-2 rounded-xl border border-border hover:border-primary/40 hover:bg-primary/5 text-foreground transition-colors"
                 >
-                  {q}
+                  {s}
                 </button>
               ))}
             </div>
           )}
 
-          {/* Input */}
-          <div className="px-3 py-3 border-t border-border flex gap-2">
-            <input
-              type="text"
+          <div ref={bottomRef} />
+        </div>
+
+        {/* Scroll-to-bottom button */}
+        {showScrollBtn && (
+          <button
+            onClick={() => scrollToBottom()}
+            className="absolute bottom-20 right-4 w-8 h-8 rounded-full bg-card border border-border shadow-md flex items-center justify-center hover:bg-muted transition-colors z-10"
+          >
+            <ChevronDown className="w-4 h-4 text-muted-foreground" />
+          </button>
+        )}
+
+        {/* Input */}
+        <div className="px-4 py-3 border-t border-border bg-card shrink-0">
+          <div className="flex items-end gap-2 bg-muted rounded-xl px-3 py-2 border border-transparent focus-within:border-primary focus-within:bg-card transition-colors">
+            <textarea
+              ref={inputRef}
               value={input}
               onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKey}
-              placeholder="Posez votre question..."
-              className="flex-1 text-xs px-3 py-2 bg-muted rounded-lg border border-transparent focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+              onKeyDown={handleKeyDown}
+              placeholder="Posez votre question…"
+              rows={1}
+              disabled={loading}
+              className="flex-1 text-sm bg-transparent resize-none outline-none text-foreground placeholder:text-muted-foreground max-h-28 leading-relaxed disabled:opacity-50"
+              style={{ minHeight: '24px' }}
+              onInput={e => {
+                const t = e.currentTarget;
+                t.style.height = 'auto';
+                t.style.height = Math.min(t.scrollHeight, 112) + 'px';
+              }}
             />
             <button
-              onClick={sendMessage}
-              disabled={!input.trim()}
-              className="w-8 h-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center hover:bg-primary-hover transition-colors disabled:opacity-50 shrink-0"
+              onClick={() => sendMessage(input)}
+              disabled={loading || !input.trim()}
+              className="w-8 h-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-40 hover:bg-primary-hover transition-colors shrink-0 mb-0.5"
             >
-              <Send className="w-3.5 h-3.5" />
+              {loading
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <Send className="w-3.5 h-3.5" />}
             </button>
           </div>
+          <p className="text-[10px] text-muted-foreground text-center mt-1.5">
+            Entrée pour envoyer · Maj+Entrée pour nouvelle ligne
+          </p>
         </div>
-      )}
+      </div>
+
+      {/* ── Floating bubble ── */}
+      <button
+        onClick={() => { setOpen(v => !v); setUnread(0); }}
+        className={`
+          fixed bottom-6 right-6 z-50
+          w-14 h-14 rounded-full shadow-xl
+          flex items-center justify-center
+          transition-all duration-300
+          ${open
+            ? 'bg-muted border border-border text-foreground'
+            : 'bg-primary text-primary-foreground hover:scale-110'}
+        `}
+      >
+        {open
+          ? <X className="w-5 h-5" />
+          : <MessageCircle className="w-6 h-6" />}
+
+        {/* Unread badge */}
+        {!open && unread > 0 && (
+          <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+            {unread > 9 ? '9+' : unread}
+          </span>
+        )}
+      </button>
     </>
   );
 };
 
-export default ChatBot;
+export default ChatbotWidget;

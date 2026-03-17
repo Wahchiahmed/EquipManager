@@ -5,6 +5,9 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Models\Role;
 use App\Models\Departement;
+use App\Models\Demande;
+use App\Models\MouvementStock;
+use Illuminate\Support\Facades\DB;
 use App\Services\AuditService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -196,16 +199,88 @@ class UserController extends Controller
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // DELETE /api/users/{user}
-    // ─────────────────────────────────────────────────────────────────────────
-    public function destroy(Request $request, User $user)
-    {
-        if ($request->user()->id === $user->id) {
-            return response()->json(['message' => 'Vous ne pouvez pas supprimer votre propre compte.'], 403);
+// DELETE /api/users/{user}
+// ─────────────────────────────────────────────────────────────────────────
+public function destroy(Request $request, User $user)
+{
+    if ($request->user()->id === $user->id) {
+        return response()->json(['message' => 'Vous ne pouvez pas supprimer votre propre compte.'], 403);
+    }
+
+    $user->load('role', 'departement');
+    $userId   = $user->id;
+    $fullName = "{$user->prenom} {$user->nom}";
+
+    $demandesAnnulees = collect();
+
+    DB::transaction(function () use ($user, $userId, $fullName, $request, &$demandesAnnulees) {
+
+        // ── 1. Annuler les demandes non encore traitées par le stock ──────
+        $demandesAnnulees = Demande::where('id_demandeur', $userId)
+            ->whereIn('statut', [
+                Demande::STATUT_ATTENTE_DEPT,
+                Demande::STATUT_ATTENTE_STOCK,
+            ])
+            ->get();
+
+        foreach ($demandesAnnulees as $demande) {
+            $oldStatut = $demande->statut;
+            $demande->update([
+                'statut'      => 'ANNULEE',
+                'commentaire' => "Annulée automatiquement suite à la suppression du compte de {$fullName}.",
+            ]);
+
+            $this->audit->log(
+                userId:         $request->user()->id,
+                tableModifiee:  'demandes',
+                typeAction:     'UPDATE',
+                description:    "Annulation automatique demande #{$demande->id_demande} — suppression utilisateur {$fullName}",
+                referenceObjet: "demande#{$demande->id_demande}",
+                details: [[
+                    'champs_modifie' => 'statut',
+                    'ancien_valeur'  => $oldStatut,
+                    'nouveau_valeur' => 'ANNULEE',
+                    'info_detail'    => "demande#{$demande->id_demande}",
+                    'commentaire'    => "Suppression compte user#{$userId}",
+                ]]
+            );
         }
 
-        // ── Snapshot avant suppression ────────────────────────────────────
-        $user->load('role', 'departement');
+        // ── 2. Nullifier historiques ──────────────────────────────────────
+        \App\Models\Historique::where('id_utilisateur', $userId)
+            ->update(['id_utilisateur' => null]);
+
+        // ── 3. Nullifier mouvements_stock ─────────────────────────────────
+        \App\Models\MouvementStock::where('id_user', $userId)
+            ->update(['id_user' => null]);
+
+        // ── 4. Nullifier responsables dans demandes ───────────────────────
+        Demande::where('id_responsable_dept', $userId)
+            ->update(['id_responsable_dept' => null]);
+        Demande::where('id_responsable_stock', $userId)
+            ->update(['id_responsable_stock' => null]);
+
+        // ── 5. Supprimer les notifications ────────────────────────────────
+        if (method_exists($user, 'notifications')) {
+            \App\Models\Notification::where('recipient_user_id', $userId)->delete();
+        }
+
+        // ── 6. Nullifier responsable_id dans departements ─────────────────
+        if (\Illuminate\Support\Facades\Schema::hasColumn('departements', 'responsable_id')) {
+            \App\Models\Departement::where('responsable_id', $userId)
+                ->update(['responsable_id' => null]);
+        }
+
+        // ── 7. Nullifier gestionnaire dans stocks ─────────────────────────
+        foreach (['stocks', 'stock_assignations', 'produit_gestionnaire'] as $table) {
+            if (\Illuminate\Support\Facades\Schema::hasTable($table)) {
+                \Illuminate\Support\Facades\DB::table($table)
+                    ->where('id_gestionnaire_stock', $userId)
+                    ->update(['id_gestionnaire_stock' => null]);
+            }
+        }
+
+        // ── 8. Audit suppression utilisateur ─────────────────────────────
         $snapshot = [
             'nom'         => $user->nom,
             'prenom'      => $user->prenom,
@@ -214,30 +289,33 @@ class UserController extends Controller
             'departement' => $user->departement?->nom ?? '—',
         ];
 
-        $userId   = $user->id;
-        $fullName = "{$user->prenom} {$user->nom}";
-
-        $user->tokens()->delete();
-        $user->delete();
-
-        // ── Audit : suppression ───────────────────────────────────────────
         $this->audit->log(
             userId:         $request->user()->id,
             tableModifiee:  'users',
             typeAction:     'DELETE',
-            description:    "Suppression de l'utilisateur {$fullName} (#{$userId})",
+            description:    "Suppression définitive de l'utilisateur {$fullName} (#{$userId}). {$demandesAnnulees->count()} demande(s) annulée(s).",
             referenceObjet: "user#{$userId}",
             details: array_map(fn($champ, $valeur) => [
                 'champs_modifie' => $champ,
                 'ancien_valeur'  => $valeur,
                 'nouveau_valeur' => null,
                 'info_detail'    => "user#{$userId}",
-                'commentaire'    => 'Champ supprimé',
+                'commentaire'    => 'Compte supprimé',
             ], array_keys($snapshot), array_values($snapshot))
         );
 
-        return response()->json(['message' => 'Utilisateur supprimé avec succès.']);
-    }
+        // ── 9. Tokens Sanctum ─────────────────────────────────────────────
+        $user->tokens()->delete();
+
+        // ── 10. Supprimer l'utilisateur ───────────────────────────────────
+        $user->delete();
+    });
+
+    return response()->json([
+        'message'           => "Utilisateur {$fullName} supprimé avec succès.",
+        'demandes_annulees' => $demandesAnnulees->count(),
+    ]);
+}
 
     // ─────────────────────────────────────────────────────────────────────────
     // PATCH /api/users/{user}/toggle-active

@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Shield, Search, RefreshCw, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import api from '@/lib/api';
-import { ApiHistorique, ApiDetailHistorique } from './AdminTypes';
+import { ApiHistorique, ApiDetailHistorique } from './adminTypes';
 import { PageHeader, LoadingSpinner } from './AdminShared';
 
 // ── Audit Details Modal ───────────────────────────────────────────────────────

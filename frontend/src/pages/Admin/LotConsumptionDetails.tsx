@@ -1,17 +1,3 @@
-// src/components/admin/LotConsumptionDetails.tsx
-// Reusable component that shows which FIFO lots were consumed
-// for a mouvement, a detail line, or a whole demande.
-//
-// Props (pick ONE source):
-//   mouvementId    → fetches /[prefix]/mouvements/{id}/lots
-//   detailDemandeId → fetches /[prefix]/details/{id}/lots
-//   demandeId      → fetches /[prefix]/demandes/{id}/lots  (summary over all lines)
-//   lots           → pre-fetched array (skips fetch entirely)
-//
-// Display modes:
-//   compact={true}  → inline collapsible pill-list (default for tables/lines)
-//   compact={false} → full card with FIFO index badges and before→after columns
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { ChevronDown, ChevronUp, Layers, RefreshCw, AlertTriangle } from 'lucide-react';
 import api from '@/lib/api';

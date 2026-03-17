@@ -7,7 +7,7 @@ import {
   Hash, Shield, BarChart2,
 } from 'lucide-react';
 import api from '@/lib/api';
-import { ApiDemande } from './AdminTypes';
+import { ApiDemande } from './adminTypes';
 import { PageHeader, LoadingSpinner } from './AdminShared';
 import StatusBadge from '@/components/StatusBadge';
 

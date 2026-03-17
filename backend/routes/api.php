@@ -10,7 +10,9 @@ use App\Http\Controllers\StockController;
 use App\Http\Controllers\HistoriqueController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\NotificationsController;
+use App\Http\Controllers\ChatbotController;
 use Illuminate\Support\Facades\Route;
+
 
 // ── Public ────────────────────────────────────────────────────────────────────
 Route::post('/login', [AuthController::class, 'login']);
@@ -52,6 +54,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('demandes/{demande}',                 [DemandeController::class, 'update']);
     Route::delete('demandes/{demande}',              [DemandeController::class, 'destroy']);
     Route::put('demandes/{demande}/modifier',        [DemandeController::class, 'modifier']);
+
+
+    Route::post('chatbot/message', [ChatbotController::class, 'message']);
+
 
     // ── Responsable département ───────────────────────────────────────────────
     Route::middleware('role:responsable departement')->group(function () {
@@ -103,9 +109,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('users/{user}/toggle-active', [UserController::class, 'toggleActive']);
         Route::apiResource('users', UserController::class);
 
-        Route::get('departements',                  [DepartementController::class, 'index']);
-        Route::post('departements',                 [DepartementController::class, 'store']);
-        Route::delete('departements/{departement}', [DepartementController::class, 'destroy']);
+        Route::get('departements',                                    [DepartementController::class, 'index']);
+        Route::post('departements',                                   [DepartementController::class, 'store']);
+        Route::patch('departements/{departement}',                    [DepartementController::class, 'update']);
+        Route::delete('departements/{departement}',                   [DepartementController::class, 'destroy']);
+        Route::get('departements/available-users',                    [DepartementController::class, 'availableUsers']);
+        Route::get('departements/{departement}/users',                [DepartementController::class, 'users']);
+        Route::post('departements/{departement}/assign',              [DepartementController::class, 'assignUser']);
+        Route::delete('departements/{departement}/users/{user}',      [DepartementController::class, 'unassignUser']);
 
         Route::get('categories',                [CategorieController::class, 'index']);
         Route::post('categories',               [CategorieController::class, 'store']);

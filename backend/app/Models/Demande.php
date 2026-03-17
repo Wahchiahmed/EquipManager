@@ -36,6 +36,7 @@ class Demande extends Model
     const STATUT_LIVREE        = 'LIVREE';
     const STATUT_REFUSEE_DEPT  = 'REFUSEE_DEPT';
     const STATUT_REFUSEE_STOCK = 'REFUSEE_STOCK';
+    const STATUT_ANNULEE = 'ANNULEE';
 
     // ── Relations ─────────────────────────────────────────────────────────────
 
