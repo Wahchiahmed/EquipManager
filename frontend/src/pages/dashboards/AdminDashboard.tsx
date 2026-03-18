@@ -4,7 +4,9 @@ import {
   Users, Building2, Package, Shield, BarChart3, FileText,
   Plus, Search, Trash2, ArrowUp, ArrowDown, Tag,
   UserCheck, UserX, X, Loader2, AlertTriangle, ToggleLeft, ToggleRight,
-  ChevronLeft, ChevronRight, Layers,
+  ChevronLeft, ChevronRight, Layers, UserPlus,
+  Check, Clock, Mail, BadgeCheck, ShieldX, RefreshCw,
+  ChevronDown, ChevronUp,
 } from 'lucide-react';
 import StatusBadge from '@/components/StatusBadge';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -12,7 +14,7 @@ import api from '@/lib/api';
 import ProductLotsModal from '../Admin/ProductLotsModal';
 import LotConsumptionDetails from '../Admin/LotConsumptionDetails';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 interface ApiUser {
   id_utilisateur: number; nom: string; prenom: string; email: string;
@@ -71,11 +73,24 @@ interface ProduitForm {
   id_categorie: string; is_active: boolean;
 }
 
+// ── Inscription types ──────────────────────────────────────────────────────────
+
+interface ApiInscription {
+  id: number;
+  nom: string; prenom: string; email: string; cin: string | null;
+  telephone: string | null; role_id: number; role_nom: string;
+  statut: 'en_attente' | 'accepte' | 'refuse';
+  commentaire_admin: string | null;
+  traite_par_nom: string | null; traite_le: string | null;
+  created_at: string;
+}
+interface InscriptionStats {
+  en_attente: number; acceptes: number; refuses: number; total: number;
+}
+
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const ITEMS_PER_PAGE = 10;
-
-// Statuts où les lots ont déjà été consommés
 const STATUTS_AVEC_LOTS = ['VALIDEE', 'PARTIELLEMENT_VALIDEE', 'LIVREE', 'REFUSEE_STOCK'];
 
 const roleColors: Record<string, string> = {
@@ -86,11 +101,25 @@ const roleLabels: Record<string, string> = {
   EMPLOYEE: 'Employé', RESPONSABLE_DEPARTEMENT: 'Resp. Département',
   RESPONSABLE_STOCK: 'Resp. Stock', ADMIN: 'Admin',
 };
-const EMPTY_USER_FORM: CreateUserForm   = { nom: '', prenom: '', email: '', password: '', telephone: '', role_id: '', departement_id: '' };
-const EMPTY_PRODUIT_FORM: ProduitForm   = { nom_produit: '', description: '', reference: '', code_barre: '', quantite: '0', seuil_alerte: '5', id_categorie: '', is_active: true };
+const EMPTY_USER_FORM: CreateUserForm = { nom: '', prenom: '', email: '', password: '', telephone: '', role_id: '', departement_id: '' };
+const EMPTY_PRODUIT_FORM: ProduitForm = { nom_produit: '', description: '', reference: '', code_barre: '', quantite: '0', seuil_alerte: '5', id_categorie: '', is_active: true };
 const inputCls = "w-full px-3 py-2 text-sm bg-muted border border-transparent rounded-lg focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 
-// ── Shared ─────────────────────────────────────────────────────────────────────
+const inscriptionRoleLabel = (nom: string) => {
+  const m: Record<string, string> = {
+    'employe': 'Employé', 'responsable departement': 'Resp. Département',
+    'responsable stock': 'Resp. Stock', 'admin': 'Admin',
+  };
+  return m[nom.toLowerCase()] ?? nom;
+};
+
+const inscriptionStatutCfg = {
+  en_attente: { label: 'En attente', cls: 'bg-amber-100 text-amber-800', icon: Clock     },
+  accepte:    { label: 'Accepté',   cls: 'bg-green-100 text-green-800',  icon: UserCheck },
+  refuse:     { label: 'Refusé',    cls: 'bg-red-100 text-red-800',      icon: UserX     },
+};
+
+// ── Shared components ──────────────────────────────────────────────────────────
 
 const ConfirmDialog: React.FC<{ message: string; onConfirm: () => void; onCancel: () => void; danger?: boolean }> = ({ message, onConfirm, onCancel, danger }) => (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
@@ -696,9 +725,7 @@ const ProduitsTab: React.FC = () => {
               </div>
               {totalPages > 1 && (
                 <div className="flex items-center justify-between px-5 py-3 border-t border-border bg-muted/20 mt-auto">
-                  <span className="text-xs text-muted-foreground">
-                    {(currentPage - 1) * ITEMS_PER_PAGE + 1}–{Math.min(currentPage * ITEMS_PER_PAGE, filtered.length)} sur {filtered.length}
-                  </span>
+                  <span className="text-xs text-muted-foreground">{(currentPage - 1) * ITEMS_PER_PAGE + 1}–{Math.min(currentPage * ITEMS_PER_PAGE, filtered.length)} sur {filtered.length}</span>
                   <div className="flex items-center gap-1.5">
                     <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-1.5 rounded-md bg-card border border-border disabled:opacity-50 hover:bg-muted transition-colors"><ChevronLeft className="w-4 h-4" /></button>
                     <span className="text-xs font-semibold px-2 text-muted-foreground">Page {currentPage} / {totalPages}</span>
@@ -714,29 +741,278 @@ const ProduitsTab: React.FC = () => {
   );
 };
 
+// ── Inscriptions Decision Modal ────────────────────────────────────────────────
+
+const DecisionModal: React.FC<{
+  demande: ApiInscription;
+  action: 'accepter' | 'refuser';
+  onClose: () => void;
+  onDone: (updated: ApiInscription) => void;
+}> = ({ demande, action, onClose, onDone }) => {
+  const [commentaire, setCommentaire] = useState('');
+  const [loading, setLoading]         = useState(false);
+  const [error, setError]             = useState('');
+  const isAccept = action === 'accepter';
+
+  const handleSubmit = async () => {
+    if (!isAccept && !commentaire.trim()) { setError('Veuillez fournir un motif de refus.'); return; }
+    setLoading(true); setError('');
+    try {
+      const res = await api.post(`/admin/inscriptions/${demande.id}/${action}`, { commentaire: commentaire || undefined });
+      onDone(res.data.demande);
+      onClose();
+    } catch (e: any) {
+      setError(e.response?.data?.message ?? 'Une erreur est survenue.');
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md">
+        <div className={`px-6 py-5 rounded-t-2xl ${isAccept ? 'bg-green-50 dark:bg-green-950/30 border-b border-green-200/50' : 'bg-red-50 dark:bg-red-950/30 border-b border-red-200/50'}`}>
+          <div className="flex items-center gap-3">
+            {isAccept ? <BadgeCheck className="w-6 h-6 text-green-600 shrink-0" /> : <ShieldX className="w-6 h-6 text-red-600 shrink-0" />}
+            <div>
+              <h3 className="font-bold text-foreground">{isAccept ? 'Accepter la demande' : 'Refuser la demande'}</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">{demande.prenom} {demande.nom} · {demande.email}</p>
+            </div>
+            <button onClick={onClose} className="ml-auto text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+          </div>
+        </div>
+        <div className="p-6 space-y-4">
+          {isAccept ? (
+            <div className="bg-green-50 dark:bg-green-950/20 border border-green-200/50 rounded-xl px-4 py-3 text-sm text-green-700 dark:text-green-400">
+              Un compte sera créé pour <strong>{demande.prenom} {demande.nom}</strong> avec le rôle <strong>{inscriptionRoleLabel(demande.role_nom)}</strong>. Un email sera envoyé à <strong>{demande.email}</strong>.
+            </div>
+          ) : (
+            <div className="bg-red-50 dark:bg-red-950/20 border border-red-200/50 rounded-xl px-4 py-3 text-sm text-red-700 dark:text-red-400">
+              La demande sera refusée. Un email de notification sera envoyé à <strong>{demande.email}</strong>.
+            </div>
+          )}
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1.5 uppercase tracking-wider">{isAccept ? 'Message (optionnel)' : 'Motif du refus *'}</label>
+            <textarea rows={3} value={commentaire} onChange={e => setCommentaire(e.target.value)}
+              placeholder={isAccept ? 'Message de bienvenue…' : 'Expliquez la raison du refus…'}
+              className="w-full px-3 py-2.5 text-sm bg-muted border border-transparent rounded-xl focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none" />
+          </div>
+          {error && <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-3 py-2.5 text-xs text-red-600"><AlertTriangle className="w-3.5 h-3.5 shrink-0" />{error}</div>}
+        </div>
+        <div className="px-6 pb-6 flex gap-3">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-border text-sm font-semibold hover:bg-muted transition-colors">Annuler</button>
+          <button onClick={handleSubmit} disabled={loading}
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-50 transition-colors ${isAccept ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}>
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : isAccept ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
+            {loading ? 'Traitement…' : isAccept ? 'Accepter & créer le compte' : 'Refuser la demande'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Inscriptions Tab ───────────────────────────────────────────────────────────
+
+const InscriptionsTab: React.FC = () => {
+  const [demandes, setDemandes]         = useState<ApiInscription[]>([]);
+  const [stats, setStats]               = useState<InscriptionStats | null>(null);
+  const [loading, setLoading]           = useState(true);
+  const [search, setSearch]             = useState('');
+  const [filterStatut, setFilterStatut] = useState<'en_attente' | 'accepte' | 'refuse' | 'all'>('en_attente');
+  const [modal, setModal]               = useState<{ demande: ApiInscription; action: 'accepter' | 'refuser' } | null>(null);
+  const [expanded, setExpanded]         = useState<number | null>(null);
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [d, s] = await Promise.all([
+        api.get(`/admin/inscriptions?statut=${filterStatut}`),
+        api.get('/admin/inscriptions/stats'),
+      ]);
+      setDemandes(d.data);
+      setStats(s.data);
+    } finally { setLoading(false); }
+  }, [filterStatut]);
+
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  const handleDone = (updated: ApiInscription) => {
+    setDemandes(prev => filterStatut === 'all' ? prev.map(d => d.id === updated.id ? updated : d) : prev.filter(d => d.id !== updated.id));
+    api.get('/admin/inscriptions/stats').then(r => setStats(r.data)).catch(() => {});
+  };
+
+  const filtered = demandes.filter(d => {
+    const q = search.toLowerCase();
+    return !q || `${d.prenom} ${d.nom} ${d.email} ${d.cin ?? ''}`.toLowerCase().includes(q);
+  });
+
+  return (
+    <>
+      {modal && <DecisionModal demande={modal.demande} action={modal.action} onClose={() => setModal(null)} onDone={handleDone} />}
+
+      <div className="space-y-4">
+        {/* Stats */}
+        <div className="grid grid-cols-4 gap-3">
+          {[
+            { label: 'En attente', value: stats?.en_attente ?? 0, cls: 'text-amber-600',    bg: 'bg-amber-50 dark:bg-amber-950/20 border-amber-200/50',   pulse: (stats?.en_attente ?? 0) > 0 },
+            { label: 'Acceptées',  value: stats?.acceptes   ?? 0, cls: 'text-green-600',    bg: 'bg-green-50 dark:bg-green-950/20 border-green-200/50',    pulse: false },
+            { label: 'Refusées',   value: stats?.refuses    ?? 0, cls: 'text-red-600',      bg: 'bg-red-50 dark:bg-red-950/20 border-red-200/50',          pulse: false },
+            { label: 'Total',      value: stats?.total      ?? 0, cls: 'text-foreground',   bg: 'bg-card border-border',                                   pulse: false },
+          ].map(s => (
+            <div key={s.label} className={`border rounded-xl p-4 ${s.bg}`}>
+              <div className="flex items-start justify-between">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{s.label}</p>
+                {s.pulse && <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" /><span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" /></span>}
+              </div>
+              <p className={`text-2xl font-bold mt-1 ${s.cls}`}>{s.value}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Table */}
+        <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
+          <div className="flex flex-wrap items-center gap-3 px-5 py-4 border-b border-border">
+            <h2 className="font-semibold text-foreground">
+              Demandes d'inscription
+              {(stats?.en_attente ?? 0) > 0 && <span className="ml-2 text-xs bg-amber-100 text-amber-700 font-bold px-2 py-0.5 rounded-full">{stats?.en_attente} en attente</span>}
+            </h2>
+            <div className="flex items-center gap-2 ml-auto flex-wrap">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                <input type="text" placeholder="Nom, email, CIN..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 pr-3 py-1.5 text-xs bg-muted border border-transparent rounded-lg focus:border-primary focus:outline-none w-48" />
+              </div>
+              <div className="flex gap-1 bg-muted p-0.5 rounded-lg">
+                {([
+                  { key: 'en_attente', label: 'En attente' },
+                  { key: 'accepte',    label: 'Acceptées'  },
+                  { key: 'refuse',     label: 'Refusées'   },
+                  { key: 'all',        label: 'Toutes'     },
+                ] as const).map(opt => (
+                  <button key={opt.key} onClick={() => setFilterStatut(opt.key)}
+                    className={`text-xs px-2.5 py-1 rounded-md font-medium transition-colors ${filterStatut === opt.key ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <button onClick={fetchAll} disabled={loading} className="p-1.5 bg-muted rounded-lg border border-transparent hover:border-border transition-colors disabled:opacity-50">
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground"><Loader2 className="w-5 h-5 animate-spin" /><span className="text-sm">Chargement…</span></div>
+          ) : filtered.length === 0 ? (
+            <div className="py-16 text-center"><UserPlus className="w-8 h-8 text-muted-foreground/40 mx-auto mb-3" /><p className="text-sm text-muted-foreground">Aucune demande trouvée</p></div>
+          ) : (
+            <div className="divide-y divide-border">
+              {filtered.map(d => {
+                const cfg = inscriptionStatutCfg[d.statut];
+                const Ico = cfg.icon;
+                const isExpanded = expanded === d.id;
+                return (
+                  <div key={d.id} className="hover:bg-muted/20 transition-colors">
+                    <div className="flex items-center gap-4 px-5 py-4">
+                      <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0 text-sm font-bold text-primary">{d.prenom[0]}{d.nom[0]}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-semibold text-foreground">{d.prenom} {d.nom}</span>
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${cfg.cls}`}>{cfg.label}</span>
+                          <span className="text-[11px] bg-muted text-muted-foreground px-2 py-0.5 rounded-full font-medium">{inscriptionRoleLabel(d.role_nom)}</span>
+                        </div>
+                        <div className="flex items-center gap-3 mt-0.5">
+                          <span className="text-xs text-muted-foreground flex items-center gap-1"><Mail className="w-3 h-3" />{d.email}</span>
+                          {d.cin && <span className="text-xs text-muted-foreground">CIN : {d.cin}</span>}
+                          <span className="text-xs text-muted-foreground">{d.created_at}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {d.statut === 'en_attente' && (
+                          <>
+                            <button onClick={() => setModal({ demande: d, action: 'accepter' })}
+                              className="flex items-center gap-1 text-xs font-semibold px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg transition-colors">
+                              <Check className="w-3.5 h-3.5" /> Accepter
+                            </button>
+                            <button onClick={() => setModal({ demande: d, action: 'refuser' })}
+                              className="flex items-center gap-1 text-xs font-semibold px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors">
+                              <X className="w-3.5 h-3.5" /> Refuser
+                            </button>
+                          </>
+                        )}
+                        {d.statut !== 'en_attente' && (
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Ico className="w-3.5 h-3.5" />
+                            {d.traite_par_nom && <span>par {d.traite_par_nom}</span>}
+                            {d.traite_le && <span>· {d.traite_le}</span>}
+                          </div>
+                        )}
+                        <button onClick={() => setExpanded(isExpanded ? null : d.id)} className="p-1 text-muted-foreground hover:text-foreground transition-colors">
+                          {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div className="px-5 pb-4 border-t border-border/50 pt-3 bg-muted/10">
+                        <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs ml-[52px]">
+                          {([
+                            ['Téléphone', d.telephone ?? '—'],
+                            ['CIN', d.cin ?? '—'],
+                            ['Rôle demandé', inscriptionRoleLabel(d.role_nom)],
+                            ['Soumis le', d.created_at],
+                            d.commentaire_admin ? ['Commentaire admin', d.commentaire_admin] : null,
+                            d.traite_par_nom ? ['Traité par', `${d.traite_par_nom}${d.traite_le ? ' · ' + d.traite_le : ''}`] : null,
+                          ] as ([string, string] | null)[]).filter(Boolean).map(([label, value]) => (
+                            <div key={label}><span className="text-muted-foreground">{label} : </span><span className="text-foreground font-medium">{value}</span></div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+};
+
 // ── Main Admin Dashboard ───────────────────────────────────────────────────────
 
 const AdminDashboard: React.FC = () => {
-  const [tab, setTab] = useState<'overview' | 'users' | 'departments' | 'products' | 'requests' | 'audit'>('overview');
+  const [tab, setTab] = useState<'overview' | 'users' | 'departments' | 'products' | 'requests' | 'audit' | 'inscriptions'>('overview');
+  const [inscriptionPendingCount, setInscriptionPendingCount] = useState(0);
+
+  // Fetch inscription badge count on mount + after tab changes
+  useEffect(() => {
+    api.get('/admin/inscriptions/stats')
+      .then(r => setInscriptionPendingCount(r.data.en_attente ?? 0))
+      .catch(() => {});
+  }, []);
 
   const tabs = [
-    { key: 'overview',    label: "Vue d'ensemble", icon: BarChart3 },
-    { key: 'users',       label: 'Utilisateurs',   icon: Users     },
-    { key: 'departments', label: 'Départements',   icon: Building2 },
-    { key: 'products',    label: 'Produits',       icon: Package   },
-    { key: 'requests',    label: 'Demandes',       icon: FileText  },
-    { key: 'audit',       label: 'Audit',          icon: Shield    },
+    { key: 'overview',      label: "Vue d'ensemble", icon: BarChart3  },
+    { key: 'users',         label: 'Utilisateurs',   icon: Users      },
+    { key: 'departments',   label: 'Départements',   icon: Building2  },
+    { key: 'products',      label: 'Produits',       icon: Package    },
+    { key: 'requests',      label: 'Demandes',       icon: FileText   },
+    { key: 'audit',         label: 'Audit',          icon: Shield     },
+    {
+      key: 'inscriptions',
+      label: inscriptionPendingCount > 0 ? `Inscriptions (${inscriptionPendingCount})` : 'Inscriptions',
+      icon: UserPlus,
+    },
   ];
 
-  const [adminDemandes, setAdminDemandes]   = useState<ApiDemande[]>([]);
+  const [adminDemandes, setAdminDemandes]     = useState<ApiDemande[]>([]);
   const [demandesLoading, setDemandesLoading] = useState(false);
-  const [mouvements, setMouvements]         = useState<ApiMouvement[]>([]);
-  const [mouvLoading, setMouvLoading]       = useState(false);
-  const [auditLogs, setAuditLogs]           = useState<ApiHistorique[]>([]);
-  const [auditLoading, setAuditLoading]     = useState(false);
-  const [auditSearch, setAuditSearch]       = useState('');
-  const [auditType, setAuditType]           = useState<string>('');
-  const [selectedAudit, setSelectedAudit]   = useState<ApiHistorique | null>(null);
+  const [mouvements, setMouvements]           = useState<ApiMouvement[]>([]);
+  const [mouvLoading, setMouvLoading]         = useState(false);
+  const [auditLogs, setAuditLogs]             = useState<ApiHistorique[]>([]);
+  const [auditLoading, setAuditLoading]       = useState(false);
+  const [auditSearch, setAuditSearch]         = useState('');
+  const [auditType, setAuditType]             = useState<string>('');
+  const [selectedAudit, setSelectedAudit]     = useState<ApiHistorique | null>(null);
 
   const filteredAuditLogs = useMemo(() => {
     const q = auditSearch.trim().toLowerCase();
@@ -768,9 +1044,10 @@ const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     if (tab === 'overview' || tab === 'requests') { if (adminDemandes.length === 0) fetchAdminDemandes(); }
-    if (tab === 'overview' || tab === 'audit') {
-      if (mouvements.length === 0) fetchAdminMouvements();
-      if (auditLogs.length === 0) fetchAdminAudit();
+    if (tab === 'overview' || tab === 'audit')    { if (mouvements.length === 0) fetchAdminMouvements(); if (auditLogs.length === 0) fetchAdminAudit(); }
+    // Refresh badge when leaving inscriptions tab
+    if (tab !== 'inscriptions') {
+      api.get('/admin/inscriptions/stats').then(r => setInscriptionPendingCount(r.data.en_attente ?? 0)).catch(() => {});
     }
   }, [tab, adminDemandes.length, mouvements.length, auditLogs.length, fetchAdminDemandes, fetchAdminMouvements, fetchAdminAudit]);
 
@@ -799,9 +1076,7 @@ const AdminDashboard: React.FC = () => {
   const recentActivity = useMemo(() =>
     mouvements.slice().sort((a, b) => (b.date_mouvement ?? '').localeCompare(a.date_mouvement ?? '')).slice(0, 5).map(m => ({
       id: m.id_mouvement, type_action: m.type_mouvement === 'IN' ? 'IN' : 'OUT',
-      description: m.type_mouvement === 'IN'
-        ? `Entrée stock: +${m.quantite_mouvement} (${m.produit?.nom_produit ?? '—'})`
-        : `Sortie stock: -${m.quantite_mouvement} (${m.produit?.nom_produit ?? '—'})`,
+      description: m.type_mouvement === 'IN' ? `Entrée stock: +${m.quantite_mouvement} (${m.produit?.nom_produit ?? '—'})` : `Sortie stock: -${m.quantite_mouvement} (${m.produit?.nom_produit ?? '—'})`,
       user_nom: m.user ? `${m.user.prenom} ${m.user.nom}` : '—',
       date_action: m.date_mouvement, table_modifiee: 'mouvements',
     })),
@@ -817,8 +1092,16 @@ const AdminDashboard: React.FC = () => {
       <div className="flex gap-1 bg-muted p-1 rounded-xl overflow-x-auto">
         {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key as typeof tab)}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg whitespace-nowrap transition-all ${tab === t.key ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
-            <t.icon className="w-3.5 h-3.5" />{t.label}
+            className={`relative flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg whitespace-nowrap transition-all ${tab === t.key ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+            <t.icon className="w-3.5 h-3.5" />
+            {t.label}
+            {/* Pulse dot for inscriptions with pending */}
+            {t.key === 'inscriptions' && inscriptionPendingCount > 0 && tab !== 'inscriptions' && (
+              <span className="relative flex h-1.5 w-1.5 ml-0.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500" />
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -856,9 +1139,7 @@ const AdminDashboard: React.FC = () => {
               <div className="divide-y divide-border">
                 {recentActivity.map((h, idx) => (
                   <div key={h.id ?? idx} className="flex items-center gap-3 px-5 py-3.5">
-                    <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold ${h.type_action === 'IN' ? 'bg-status-approved-bg text-status-approved' : 'bg-status-rejected-bg text-status-rejected'}`}>
-                      {h.type_action}
-                    </div>
+                    <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold ${h.type_action === 'IN' ? 'bg-status-approved-bg text-status-approved' : 'bg-status-rejected-bg text-status-rejected'}`}>{h.type_action}</div>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium text-foreground truncate">{h.description}</p>
                       <p className="text-[11px] text-muted-foreground">{h.user_nom} · {h.date_action}</p>
@@ -875,6 +1156,7 @@ const AdminDashboard: React.FC = () => {
       {tab === 'users'       && <UsersTab />}
       {tab === 'departments' && <DepartementsTab />}
       {tab === 'products'    && <ProduitsTab />}
+      {tab === 'inscriptions' && <InscriptionsTab />}
 
       {/* REQUESTS */}
       {tab === 'requests' && (
@@ -903,42 +1185,23 @@ const AdminDashboard: React.FC = () => {
                           <StatusBadge status={d.statut as any} />
                         </div>
                         <p className="text-xs text-muted-foreground">{prenom} {nom} · {dept} · {d.date_demande}</p>
-
-                        {/* Lines with per-line FIFO details */}
                         {Array.isArray(d.details) && d.details.length > 0 && (
                           <div className="mt-2 flex flex-col gap-1.5">
                             {d.details.map((x, i) => (
                               <div key={i}>
-                                <span className={`inline-flex text-xs px-2 py-1 rounded-md font-medium border ${
-                                  x.statut === 'accepte' ? 'bg-green-50 border-green-200 text-green-700'
-                                  : x.statut === 'refuse' ? 'bg-red-50 border-red-200 text-red-600 line-through'
-                                  : 'bg-muted border-border text-muted-foreground'
-                                }`}>
+                                <span className={`inline-flex text-xs px-2 py-1 rounded-md font-medium border ${x.statut === 'accepte' ? 'bg-green-50 border-green-200 text-green-700' : x.statut === 'refuse' ? 'bg-red-50 border-red-200 text-red-600 line-through' : 'bg-muted border-border text-muted-foreground'}`}>
                                   {x.produit_nom ?? x.nom ?? `Produit #${x.id_produit}`} ({x.quantite})
                                 </span>
-                                {/* ── FIFO: lots par ligne acceptée ── */}
                                 {x.statut === 'accepte' && hasLots && (
-                                  <LotConsumptionDetails
-                                    detailDemandeId={x.id_detail}
-                                    endpointPrefix="/admin"
-                                    compact={true}
-                                    defaultOpen={false}
-                                  />
+                                  <LotConsumptionDetails detailDemandeId={x.id_detail} endpointPrefix="/admin" compact={true} defaultOpen={false} />
                                 )}
                               </div>
                             ))}
                           </div>
                         )}
-
-                        {/* ── FIFO: résumé global de consommation ── */}
                         {hasLots && (
                           <div className="mt-3">
-                            <LotConsumptionDetails
-                              demandeId={d.id_demande}
-                              endpointPrefix="/admin"
-                              compact={false}
-                              defaultOpen={false}
-                            />
+                            <LotConsumptionDetails demandeId={d.id_demande} endpointPrefix="/admin" compact={false} defaultOpen={false} />
                           </div>
                         )}
                       </div>
@@ -992,8 +1255,6 @@ const AdminDashboard: React.FC = () => {
               </div>
             )}
           </div>
-
-          {/* Mouvements de stock avec lots FIFO */}
           <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
             <div className="px-5 py-4 border-b border-border flex items-center justify-between">
               <h2 className="font-semibold text-foreground">Mouvements de stock</h2>
@@ -1009,30 +1270,17 @@ const AdminDashboard: React.FC = () => {
                   <div key={m.id_mouvement ?? idx} className="px-5 py-3.5 hover:bg-muted/20 transition-colors">
                     <div className="flex items-center gap-4">
                       <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${m.type_mouvement === 'IN' ? 'bg-status-approved-bg' : 'bg-status-rejected-bg'}`}>
-                        {m.type_mouvement === 'IN'
-                          ? <ArrowUp className="w-4 h-4 text-status-approved" />
-                          : <ArrowDown className="w-4 h-4 text-status-rejected" />}
+                        {m.type_mouvement === 'IN' ? <ArrowUp className="w-4 h-4 text-status-approved" /> : <ArrowDown className="w-4 h-4 text-status-rejected" />}
                       </div>
                       <div className="flex-1">
                         <p className="text-sm font-medium text-foreground">{m.produit?.nom_produit ?? '—'}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {m.date_mouvement} · {m.user ? `${m.user.prenom} ${m.user.nom}` : '—'}
-                          {m.demande?.id_demande ? ` · Demande #${m.demande.id_demande}` : ''}
-                        </p>
-                        {/* ── FIFO: lots consommés pour les sorties ── */}
+                        <p className="text-xs text-muted-foreground">{m.date_mouvement} · {m.user ? `${m.user.prenom} ${m.user.nom}` : '—'}{m.demande?.id_demande ? ` · Demande #${m.demande.id_demande}` : ''}</p>
                         {m.type_mouvement === 'OUT' && (
-                          <LotConsumptionDetails
-                            mouvementId={m.id_mouvement}
-                            endpointPrefix="/admin"
-                            compact={true}
-                            defaultOpen={false}
-                          />
+                          <LotConsumptionDetails mouvementId={m.id_mouvement} endpointPrefix="/admin" compact={true} defaultOpen={false} />
                         )}
                       </div>
                       <div className="text-right shrink-0">
-                        <p className={`text-sm font-bold ${m.type_mouvement === 'IN' ? 'text-status-approved' : 'text-status-rejected'}`}>
-                          {m.type_mouvement === 'IN' ? '+' : '-'}{m.quantite_mouvement}
-                        </p>
+                        <p className={`text-sm font-bold ${m.type_mouvement === 'IN' ? 'text-status-approved' : 'text-status-rejected'}`}>{m.type_mouvement === 'IN' ? '+' : '-'}{m.quantite_mouvement}</p>
                         <p className="text-xs text-muted-foreground">{m.quantite_avant} → {m.quantite_apres}</p>
                       </div>
                     </div>

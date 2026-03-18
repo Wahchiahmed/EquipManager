@@ -11,11 +11,14 @@ use App\Http\Controllers\HistoriqueController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\NotificationsController;
 use App\Http\Controllers\ChatbotController;
+use App\Http\Controllers\InscriptionController;
 use Illuminate\Support\Facades\Route;
 
 
 // ── Public ────────────────────────────────────────────────────────────────────
 Route::post('/login', [AuthController::class, 'login']);
+Route::post('/inscription',        [InscriptionController::class, 'store']);
+Route::get('/inscription/roles',   [InscriptionController::class, 'roles']);
 
 // ── Authenticated ─────────────────────────────────────────────────   ────────────
 Route::middleware('auth:sanctum')->group(function () {
@@ -146,5 +149,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/admin/produits/{produit}/gestionnaires', [StockController::class, 'gestionnairesParProduit']);
         Route::post('/admin/stocks/assigner',                [StockController::class, 'assigner']);
         Route::delete('/admin/stocks/desassigner',           [StockController::class, 'desassigner']);
+
+        Route::get('/admin/inscriptions',                               [InscriptionController::class, 'index']);
+        Route::get('/admin/inscriptions/stats',                         [InscriptionController::class, 'stats']);
+        Route::post('/admin/inscriptions/{inscriptionDemande}/accepter', [InscriptionController::class, 'accepter']);
+        Route::post('/admin/inscriptions/{inscriptionDemande}/refuser', [InscriptionController::class, 'refuser']);
     });
 });

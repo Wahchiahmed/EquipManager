@@ -7,7 +7,8 @@ export type RequestStatus =
   | 'REFUSEE_STOCK'
   | 'VALIDEE'
   |'PARTIELLEMENT_VALIDEE'
-  | 'LIVREE';
+  | 'LIVREE'
+  | 'ANNULEE';
 
 export type MovementType = 'IN' | 'OUT';
 
